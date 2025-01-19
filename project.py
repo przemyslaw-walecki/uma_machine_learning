@@ -3,185 +3,163 @@ import matplotlib.pyplot as plt
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import RFE
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+from sklearn.inspection import permutation_importance
+from sklearn.feature_selection import RFE as SklearnRFE
+
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import time
 
-# Stability Selection Implementation
-def stability_selection(X, y, base_model, num_features, n_iter=50, sample_size=0.7):
+def stability_selection(X, y, base_model, num_features, n_iter=10, sample_size=0.7):
     n_samples, n_features = X.shape
     feature_importance = np.zeros(n_features)
 
     for _ in range(n_iter):
         indices = np.random.choice(range(n_samples), size=int(sample_size * n_samples), replace=False)
-        X_sample, y_sample = X[indices], y[indices]
-        base_model.fit(X_sample, y_sample)
-
+        base_model.fit(X[indices], y[indices])
         if hasattr(base_model, "feature_importances_"):
             feature_importance += base_model.feature_importances_
         elif hasattr(base_model, "coef_"):
             feature_importance += np.abs(base_model.coef_).flatten()
         else:
-            raise ValueError(f"Model {type(base_model).__name__} does not support feature importance computation.")
+            raise ValueError(f"{type(base_model).__name__} does not support feature importance computation.")
 
-    feature_importance /= n_iter
     selected_features = np.argsort(feature_importance)[-num_features:]
-    return selected_features, feature_importance
+    return selected_features, feature_importance / n_iter
 
-# Load dataset
-data = load_breast_cancer()
-X = data.data
-y = data.target
+def rfe(X, y, model, n_features_to_select, feature_names):
+    feature_indices = list(range(X.shape[1]))
+    deleted_features = []
 
-# Split data into training and test sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    while len(feature_indices) > n_features_to_select:
+        model.fit(X[:, feature_indices], y)
+        if hasattr(model, "feature_importances_"):
+            importances = model.feature_importances_
+        elif hasattr(model, "coef_"):
+            importances = np.abs(model.coef_).flatten()
+        else:
+            raise ValueError(f"Model {type(model).__name__} does not support feature importance computation.")
 
-# Initialize Random Forest model
-rf_model = RandomForestClassifier(random_state=42)
+        least_important_index = np.argmin(importances)
+        deleted_features.append({
+            "feature_index": feature_indices[least_important_index],
+            "feature_name": feature_names[feature_indices[least_important_index]]
+        })
+        feature_indices.pop(least_important_index)
 
-# Baseline model evaluation
-start_time = time.time()
-rf_model.fit(X_train, y_train)
-y_pred_baseline = rf_model.predict(X_test)
-time_baseline = time.time() - start_time
+    return feature_indices, deleted_features
 
-metrics_baseline = {
-    "accuracy": accuracy_score(y_test, y_pred_baseline),
-    "precision": precision_score(y_test, y_pred_baseline),
-    "recall": recall_score(y_test, y_pred_baseline),
-    "f1_score": f1_score(y_test, y_pred_baseline),
-    "execution_time": time_baseline
-}
-
-# Stability Selection
-num_features = 10
-start_time = time.time()
-selected_features_stability, stability_importance = stability_selection(X_train, y_train, rf_model, num_features)
-time_stability = time.time() - start_time
-
-X_train_stability = X_train[:, selected_features_stability]
-X_test_stability = X_test[:, selected_features_stability]
-
-# Train and evaluate model on selected features (Stability Selection)
-rf_model.fit(X_train_stability, y_train)
-y_pred_stability = rf_model.predict(X_test_stability)
-
-metrics_stability = {
-    "accuracy": accuracy_score(y_test, y_pred_stability),
-    "precision": precision_score(y_test, y_pred_stability),
-    "recall": recall_score(y_test, y_pred_stability),
-    "f1_score": f1_score(y_test, y_pred_stability),
-    "execution_time": time_stability
-}
-
-# Recursive Feature Elimination (RFE)
-rfe = RFE(estimator=rf_model, n_features_to_select=num_features)
-start_time = time.time()
-rfe.fit(X_train, y_train)
-time_rfe = time.time() - start_time
-
-X_train_rfe = rfe.transform(X_train)
-X_test_rfe = rfe.transform(X_test)
-
-# Train and evaluate model on selected features (RFE)
-rf_model.fit(X_train_rfe, y_train)
-y_pred_rfe = rf_model.predict(X_test_rfe)
-
-metrics_rfe = {
-    "accuracy": accuracy_score(y_test, y_pred_rfe),
-    "precision": precision_score(y_test, y_pred_rfe),
-    "recall": recall_score(y_test, y_pred_rfe),
-    "f1_score": f1_score(y_test, y_pred_rfe),
-    "execution_time": time_rfe
-}
-
-# Test with additional models
-models = {
-    "Logistic Regression": LogisticRegression(max_iter=10000, random_state=42),
-    "SVM": SVC(kernel='linear', random_state=42)
-}
-
-additional_metrics = {}
-
-for model_name, model in models.items():
-    # Stability Selection
-    try:
-        start_time = time.time()
-        selected_features_stability, _ = stability_selection(X_train, y_train, model, num_features)
-        X_train_stability = X_train[:, selected_features_stability]
-        X_test_stability = X_test[:, selected_features_stability]
-        model.fit(X_train_stability, y_train)
-        y_pred = model.predict(X_test_stability)
-        time_model = time.time() - start_time
-
-        additional_metrics[model_name + " Stability Selection"] = {
-            "accuracy": accuracy_score(y_test, y_pred),
-            "precision": precision_score(y_test, y_pred),
-            "recall": recall_score(y_test, y_pred),
-            "f1_score": f1_score(y_test, y_pred),
-            "execution_time": time_model
-        }
-    except ValueError as e:
-        additional_metrics[model_name + " Stability Selection"] = str(e)
-
-    # RFE
+def evaluate_model(model, X_train, X_test, y_train, y_test):
     start_time = time.time()
-    rfe = RFE(estimator=model, n_features_to_select=num_features)
-    rfe.fit(X_train, y_train)
-    X_train_rfe = rfe.transform(X_train)
-    X_test_rfe = rfe.transform(X_test)
-    model.fit(X_train_rfe, y_train)
-    y_pred = model.predict(X_test_rfe)
-    time_model = time.time() - start_time
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    execution_time = time.time() - start_time
 
-    additional_metrics[model_name + " RFE"] = {
+    return {
         "accuracy": accuracy_score(y_test, y_pred),
         "precision": precision_score(y_test, y_pred),
         "recall": recall_score(y_test, y_pred),
         "f1_score": f1_score(y_test, y_pred),
-        "execution_time": time_model
+        "execution_time": execution_time,
     }
 
-# Visualization
-plt.figure(figsize=(14, 6))
+def print_metrics(title, metrics):
+    print(f"\n{title}:")
+    print(f"  Accuracy:     {metrics['accuracy']:.4f}")
+    print(f"  Precision:    {metrics['precision']:.4f}")
+    print(f"  Recall:       {metrics['recall']:.4f}")
+    print(f"  F1 Score:     {metrics['f1_score']:.4f}")
+    print(f"  Execution Time: {metrics['execution_time']:.4f} seconds")
 
-# Feature importance from Stability Selection
-plt.subplot(1, 2, 1)
-plt.barh(range(len(stability_importance)), sorted(stability_importance))
-plt.title("Feature Importance (Stability Selection)")
-plt.xlabel("Importance")
-plt.ylabel("Features")
+def print_deleted_features(title, deleted_features):
+    print(f"\n{title}:")
+    for feature in deleted_features:
+        print(f"  {feature['feature_name']}")
 
-# Feature ranking from RFE
-plt.subplot(1, 2, 2)
-plt.barh(range(len(rfe.ranking_)), sorted(rfe.ranking_))
-plt.title("Feature Ranking (RFE)")
-plt.xlabel("Rank")
-plt.ylabel("Features")
+def main():
+    data = load_breast_cancer()
+    X, y = data.data, data.target
+    feature_names = data.feature_names
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-plt.tight_layout()
-plt.show()
+    # Define the model
+    rf_model = RandomForestClassifier(random_state=42)
+    baseline_metrics = evaluate_model(rf_model, X_train, X_test, y_train, y_test)
+    print_metrics("Baseline Metrics", baseline_metrics)
 
-# Print metrics
-print("Metrics for Baseline Model:")
-for key, value in metrics_baseline.items():
-    print(f"{key.capitalize()}: {value:.4f}")
+    # Number of features to select
+    num_features = 10
 
-print("\nMetrics for Stability Selection:")
-for key, value in metrics_stability.items():
-    print(f"{key.capitalize()}: {value:.4f}")
+    # Custom Stability Selection
+    start_time = time.time()
+    selected_features_stability, feature_importance = stability_selection(X_train, y_train, rf_model, num_features)
+    time_stability = time.time() - start_time
+    X_train_selected_stability = X_train[:, selected_features_stability]
+    X_test_selected_stability = X_test[:, selected_features_stability]
+    stability_metrics = evaluate_model(
+        rf_model,
+        X_train_selected_stability,
+        X_test_selected_stability,
+        y_train,
+        y_test,
+    )
+    print_metrics("Custom Stability Selection Metrics", stability_metrics)
+    print(f"Custom Stability Selection Execution Time: {time_stability:.4f} seconds")
 
-print("\nMetrics for Recursive Feature Elimination (RFE):")
-for key, value in metrics_rfe.items():
-    print(f"{key.capitalize()}: {value:.4f}")
+    # Deleted features for custom stability selection
+    deleted_features_stability = [
+        {"feature_index": idx, "feature_name": feature_names[idx], "importance": feature_importance[idx]}
+        for idx in range(len(feature_importance)) if idx not in selected_features_stability
+    ]
+    print_deleted_features("Deleted Features (Custom Stability Selection)", deleted_features_stability)
 
-print("\nMetrics for Additional Models:")
-for model_name, metrics in additional_metrics.items():
-    print(f"\n{model_name}:")
-    if isinstance(metrics, dict):
-        for key, value in metrics.items():
-            print(f"{key.capitalize()}: {value:.4f}")
-    else:
-        print(metrics)
+    # Custom RFE
+    start_time = time.time()
+    selected_features_rfe, deleted_features_rfe = rfe(X_train, y_train, rf_model, num_features, feature_names)
+    time_rfe = time.time() - start_time
+    X_train_selected_rfe = X_train[:, selected_features_rfe]
+    X_test_selected_rfe = X_test[:, selected_features_rfe]
+    rfe_metrics = evaluate_model(
+        rf_model,
+        X_train_selected_rfe,
+        X_test_selected_rfe,
+        y_train,
+        y_test,
+    )
+    print_metrics("Custom RFE Metrics", rfe_metrics)
+    print(f"Custom RFE Execution Time: {time_rfe:.4f} seconds")
+    print_deleted_features("Deleted Features (Custom RFE)", deleted_features_rfe)
+
+    # Stability Selection (Library-based) using Permutation Importance
+    start_time = time.time()
+    perm_importance = permutation_importance(rf_model, X_train_selected_stability, y_train, n_repeats=10, random_state=42)
+    stability_selected_features_lib = np.argsort(perm_importance.importances_mean)[-num_features:]
+    X_train_selected_lib = X_train_selected_stability[:, stability_selected_features_lib]
+    X_test_selected_lib = X_test_selected_stability[:, stability_selected_features_lib]
+    stability_metrics_lib = evaluate_model(rf_model, X_train_selected_lib, X_test_selected_lib, y_train, y_test)
+    time_stability = time.time() - start_time
+    print_metrics("Stability Selection (Library) Metrics", stability_metrics_lib)
+    print(f"Stability Selection (Library) Execution Time: {time_stability:.4f} seconds")
+
+    # RFE (Library-based)
+    start_time = time.time()
+    rfe_selector = SklearnRFE(rf_model, n_features_to_select=num_features)
+    rfe_selector.fit(X_train_selected_rfe, y_train)
+    rfe_selected_features_lib = rfe_selector.support_
+    X_train_selected_rfe_lib = X_train_selected_rfe[:, rfe_selected_features_lib]
+    X_test_selected_rfe_lib = X_test_selected_rfe[:, rfe_selected_features_lib]
+    rfe_metrics_lib = evaluate_model(rf_model, X_train_selected_rfe_lib, X_test_selected_rfe_lib, y_train, y_test)
+    time_rfe_lib = time.time() - start_time
+    print_metrics("RFE (Library) Metrics", rfe_metrics_lib)
+    print(f"RFE (Library) Execution Time: {time_rfe_lib:.4f} seconds")
+
+    # plt.figure(figsize=(10, 5))
+    # plt.barh(range(len(feature_importance)), sorted(feature_importance), label="Stability Selection Importance")
+    # plt.title("Feature Importance (Stability Selection)")
+    # plt.xlabel("Importance")
+    # plt.ylabel("Features")
+    # plt.legend()
+    # plt.savefig("stability_selection_feature_importance.png")
+
+
+if __name__ == "__main__":
+    main()
