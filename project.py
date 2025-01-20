@@ -44,6 +44,18 @@ def rfe(X, y, model, n_features_to_select, feature_names):
 
     return feature_indices
 
+def stability_selection_library(X_train, y_train, model, num_features):
+    model.fit(X_train, y_train)
+    perm_importance = permutation_importance(model, X_train, y_train, n_repeats=10, random_state=42)
+    selected_features = np.argsort(perm_importance.importances_mean)[-num_features:]
+    return selected_features
+
+def rfe_library(X_train, y_train, model, num_features, feature_names):
+    rfe_selector = SklearnRFE(model, n_features_to_select=num_features)
+    rfe_selector.fit(X_train, y_train)
+    selected_features = np.where(rfe_selector.support_)[0]
+    return selected_features
+
 def evaluate_model(model, X_train, X_test, y_train, y_test):
     start_time = time.time()
     model.fit(X_train, y_train)
@@ -77,7 +89,6 @@ def analyze_sample_size_impact(X, y, rf_model, num_features, feature_names):
         )
         print(f"\n### Analyzing with {size * 100:.0f}% of data ({len(X_train)} samples) ###")
         
-        # Custom Stability Selection
         start_time = time.time()
         selected_features_stability = stability_selection(X_train, y_train, rf_model, num_features)
         time_stability = time.time() - start_time
@@ -92,8 +103,7 @@ def analyze_sample_size_impact(X, y, rf_model, num_features, feature_names):
         )
         print_metrics("Stability Selection Metrics", stability_metrics)
         print(f"Stability Selection Execution Time: {time_stability:.4f} seconds")
-        
-        # Custom RFE
+ 
         start_time = time.time()
         selected_features_rfe = rfe(X_train, y_train, rf_model, num_features, feature_names)
         time_rfe = time.time() - start_time
@@ -119,53 +129,8 @@ def analyze_sample_size_impact(X, y, rf_model, num_features, feature_names):
 
     return results
 
-def analyze_features_impact(X, y, rf_model, feature_names, sample_size=0.8):
-    num_features_list = [1, 2, 5, 10, 15, 20]
-    results = []
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, train_size=1 - sample_size, random_state=42
-    )
-
-    for num_features in num_features_list:
-        # Stability Selection
-        start_time = time.time()
-        selected_features_stability = stability_selection(X_train, y_train, rf_model, num_features)
-        time_stability = time.time() - start_time
-        stability_metrics = evaluate_model(
-            rf_model,
-            X_train[:, selected_features_stability],
-            X_test[:, selected_features_stability],
-            y_train,
-            y_test,
-        )
-
-        # RFE
-        start_time = time.time()
-        selected_features_rfe = rfe(X_train, y_train, rf_model, num_features, feature_names)
-        time_rfe = time.time() - start_time
-        rfe_metrics = evaluate_model(
-            rf_model,
-            X_train[:, selected_features_rfe],
-            X_test[:, selected_features_rfe],
-            y_train,
-            y_test,
-        )
-
-        # Store results
-        results.append({
-            'num_features': num_features,
-            'stability_metrics': stability_metrics,
-            'rfe_metrics': rfe_metrics,
-            'stability_time': time_stability,
-            'rfe_time': time_rfe,
-        })
-
-    return results
-
-
-def analyze_features_impact_for_models(X, y, models, feature_names, sample_size=0.8):
-    num_features_list = [1, 2, 5, 10, 15, 20]
+def analyze_features_impact_for_models(X, y, models, feature_names, num_features_list, sample_size=0.8):
     results = {}
 
     X_train, X_test, y_train, y_test = train_test_split(
@@ -184,9 +149,8 @@ def analyze_features_impact_for_models(X, y, models, feature_names, sample_size=
         }
 
         for num_features in num_features_list:
-            # Stability Selection
             start_time = time.time()
-            selected_features_stability = stability_selection(X_train, y_train, model, num_features)
+            selected_features_stability = stability_selection_library(X_train, y_train, model, num_features)
             time_stability = time.time() - start_time
             stability_metrics = evaluate_model(
                 model,
@@ -196,9 +160,8 @@ def analyze_features_impact_for_models(X, y, models, feature_names, sample_size=
                 y_test,
             )
 
-            # RFE
             start_time = time.time()
-            selected_features_rfe = rfe(X_train, y_train, model, num_features, feature_names)
+            selected_features_rfe = rfe_library(X_train, y_train, model, num_features, feature_names)
             time_rfe = time.time() - start_time
             rfe_metrics = evaluate_model(
                 model,
@@ -208,7 +171,7 @@ def analyze_features_impact_for_models(X, y, models, feature_names, sample_size=
                 y_test,
             )
 
-            # Store results for the model
+
             model_results["accuracy"].append(stability_metrics["accuracy"])
             model_results["precision"].append(stability_metrics["precision"])
             model_results["recall"].append(stability_metrics["recall"])
@@ -232,36 +195,31 @@ def main():
     X, y = data.data, data.target
     feature_names = data.feature_names
 
-    # Models to compare
     models = {
         "Random Forest": RandomForestClassifier(random_state=42),
-        "Logistic Regression": LogisticRegression(random_state=42, max_iter=5000, solver='saga'),
+        #"Logistic Regression": LogisticRegression(random_state=42, max_iter=5000, solver='saga'),
     }
 
-    # Compare features impact for multiple models
-    feature_impact_results = analyze_features_impact_for_models(X, y, models, feature_names)
-
     num_features_list = list(range(1, 29, 2))
-    
-    # Create subplots for comparison
+    feature_impact_results = analyze_features_impact_for_models(X, y, models, feature_names, num_features_list,)
+
     plt.figure(figsize=(15, 10))
-    
-    # Accuracy Comparison
+
     plt.subplot(2, 3, 1)
     for model_name, model_results in feature_impact_results.items():
-        plt.plot(num_features_list, model_results["accuracy"][:6], label=f'{model_name} Stability', marker='o')
-        plt.plot(num_features_list, model_results["accuracy"][6:], label=f'{model_name} RFE', marker='o', linestyle='--')
+        plt.plot(num_features_list, model_results["accuracy"][:14], label=f'{model_name} Stability', marker='o')
+        plt.plot(num_features_list, model_results["accuracy"][14:], label=f'{model_name} RFE', marker='o', linestyle='--')
     plt.title('Accuracy Comparison Over Number of Features')
     plt.xlabel('Number of Features to Select')
     plt.ylabel('Accuracy')
     plt.legend()
     plt.grid(True)
 
-    # Precision Comparison
+
     plt.subplot(2, 3, 2)
     for model_name, model_results in feature_impact_results.items():
-        plt.plot(num_features_list, model_results["precision"][:6], label=f'{model_name} Stability', marker='o')
-        plt.plot(num_features_list, model_results["precision"][6:], label=f'{model_name} RFE', marker='o', linestyle='--')
+        plt.plot(num_features_list, model_results["precision"][:14], label=f'{model_name} Stability', marker='o')
+        plt.plot(num_features_list, model_results["precision"][14:], label=f'{model_name} RFE', marker='o', linestyle='--')
     plt.title('Precision Comparison Over Number of Features')
     plt.xlabel('Number of Features to Select')
     plt.ylabel('Precision')
@@ -270,8 +228,8 @@ def main():
 
     plt.subplot(2, 3, 3)
     for model_name, model_results in feature_impact_results.items():
-        plt.plot(num_features_list, model_results["recall"][:6], label=f'{model_name} Stability', marker='o')
-        plt.plot(num_features_list, model_results["recall"][6:], label=f'{model_name} RFE', marker='o', linestyle='--')
+        plt.plot(num_features_list, model_results["recall"][:14], label=f'{model_name} Stability', marker='o')
+        plt.plot(num_features_list, model_results["recall"][14:], label=f'{model_name} RFE', marker='o', linestyle='--')
     plt.title('Recall Comparison Over Number of Features')
     plt.xlabel('Number of Features to Select')
     plt.ylabel('Recall')
@@ -280,8 +238,8 @@ def main():
 
     plt.subplot(2, 3, 4)
     for model_name, model_results in feature_impact_results.items():
-        plt.plot(num_features_list, model_results["f1_score"][:6], label=f'{model_name} Stability', marker='o')
-        plt.plot(num_features_list, model_results["f1_score"][6:], label=f'{model_name} RFE', marker='o', linestyle='--')
+        plt.plot(num_features_list, model_results["f1_score"][:14], label=f'{model_name} Stability', marker='o')
+        plt.plot(num_features_list, model_results["f1_score"][14:], label=f'{model_name} RFE', marker='o', linestyle='--')
     plt.title('F1 Score Comparison Over Number of Features')
     plt.xlabel('Number of Features to Select')
     plt.ylabel('F1 Score')
@@ -290,8 +248,8 @@ def main():
 
     plt.subplot(2, 3, 5)
     for model_name, model_results in feature_impact_results.items():
-        plt.plot(num_features_list, model_results["stability_times"][:6], label=f'{model_name} Stability', marker='o', linestyle='-')
-        plt.plot(num_features_list, model_results["rfe_times"][:6], label=f'{model_name} RFE', marker='o', linestyle='--')
+        plt.plot(num_features_list, model_results["stability_times"][:14], label=f'{model_name} Stability', marker='o', linestyle='-')
+        plt.plot(num_features_list, model_results["rfe_times"][:14], label=f'{model_name} RFE', marker='o', linestyle='--')
     plt.title('Execution Time Over Number of Features')
     plt.xlabel('Number of Features to Select')
     plt.ylabel('Time (seconds)')
