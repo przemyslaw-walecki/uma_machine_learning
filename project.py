@@ -150,7 +150,7 @@ def analyze_features_impact_for_models(X, y, models, feature_names, num_features
 
         for num_features in num_features_list:
             start_time = time.time()
-            selected_features_stability = stability_selection_library(X_train, y_train, model, num_features)
+            selected_features_stability = stability_selection(X_train, y_train, model, num_features)
             time_stability = time.time() - start_time
             stability_metrics = evaluate_model(
                 model,
@@ -161,7 +161,7 @@ def analyze_features_impact_for_models(X, y, models, feature_names, num_features
             )
 
             start_time = time.time()
-            selected_features_rfe = rfe_library(X_train, y_train, model, num_features, feature_names)
+            selected_features_rfe = rfe(X_train, y_train, model, num_features, feature_names)
             time_rfe = time.time() - start_time
             rfe_metrics = evaluate_model(
                 model,
@@ -257,7 +257,7 @@ def main():
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig("models_comparison.png")
+    plt.savefig("features_impact_comparison.png")
 
     # X, y = data.data, data.target
     # feature_names = data.feature_names
